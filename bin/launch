@@ -1,0 +1,48 @@
+#!/bin/bash
+
+set -e
+
+CONFIG_FILE=./config.sh
+
+if [ ! -f "$CONFIG_FILE" ]; then
+    echo "configuration file not found; run bin/build first"
+    exit 1
+fi
+
+source $CONFIG_FILE
+
+default_arn=$($AWS sts get-caller-identity --query Arn --output text)
+read -p "KMS Key Administrator ARNs, comma-separated [$default_arn]: " admin_arns
+admin_arns=${admin_arns:-$default_arn}
+
+assume_role_fn_version=$($AWS s3api head-object --bucket $DIST_BUCKET --key assume_role.zip --query VersionId --output text)
+create_stack_fn_version=$($AWS s3api head-object --bucket $DIST_BUCKET --key create_stack.zip --query VersionId --output text)
+update_stack_fn_version=$($AWS s3api head-object --bucket $DIST_BUCKET --key update_stack.zip --query VersionId --output text)
+delete_stack_fn_version=$($AWS s3api head-object --bucket $DIST_BUCKET --key delete_stack.zip --query VersionId --output text)
+describe_stack_fn_version=$($AWS s3api head-object --bucket $DIST_BUCKET --key describe_stack.zip --query VersionId --output text)
+start_workflows_fn_version=$($AWS s3api head-object --bucket $DIST_BUCKET --key start_workflows.zip --query VersionId --output text)
+get_workflow_statuses_fn_version=$($AWS s3api head-object --bucket $DIST_BUCKET --key get_workflow_statuses.zip --query VersionId --output text)
+sns_notification_handler_fn_version=$($AWS s3api head-object --bucket $DIST_BUCKET --key sns_notification_handler.zip --query VersionId --output text)
+enroll_account_fn_version=$($AWS s3api head-object --bucket $DIST_BUCKET --key enroll_account.zip --query VersionId --output text)
+
+$AWS cloudformation create-stack --stack-name $STACK_NAME \
+   --template-url https://s3.amazonaws.com/$DIST_BUCKET/$TEMPLATE \
+   --capabilities CAPABILITY_IAM \
+   --on-failure DO_NOTHING \
+   --parameters ParameterKey=KeyAdministratorARNs,ParameterValue="${admin_arns}" \
+                ParameterKey=DistBucket,ParameterValue="${DIST_BUCKET}" \
+                ParameterKey=AssumeRoleFnVersion,ParameterValue="${assume_role_fn_version}" \
+                ParameterKey=CreateStackFnVersion,ParameterValue="${create_stack_fn_version}" \
+                ParameterKey=UpdateStackFnVersion,ParameterValue="${update_stack_fn_version}" \
+                ParameterKey=DeleteStackFnVersion,ParameterValue="${delete_stack_fn_version}" \
+                ParameterKey=DescribeStackFnVersion,ParameterValue="${describe_stack_fn_version}" \
+                ParameterKey=StartWorkflowsFnVersion,ParameterValue="${start_workflows_fn_version}" \
+                ParameterKey=GetWorkflowStatusesFnVersion,ParameterValue="${get_workflow_statuses_fn_version}" \
+                ParameterKey=SNSNotificationHandlerFnVersion,ParameterValue="${sns_notification_handler_fn_version}" \
+		ParameterKey=EnrollAccountFnVersion,ParameterValue="${enroll_account_fn_version}"
+
+echo "Waiting for stack creation..."
+
+$AWS cloudformation wait stack-create-complete --stack-name $STACK_NAME
+
+echo "Stack created!"

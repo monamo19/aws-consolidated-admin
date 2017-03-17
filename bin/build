@@ -1,0 +1,76 @@
+#!/bin/bash
+
+set -ex
+
+CONFIG_FILE=./config.sh
+
+if [ ! -f "$CONFIG_FILE" ]; then
+    echo "Creating new configuration file"
+
+    rand_token=$(cat /dev/urandom | tr -dc 'a-z' | fold -w 16 | head -n 1)
+
+    cat >$CONFIG_FILE <<EOF
+# Configuration information for your environment
+
+AWS="aws --profile dso-demo-master"
+DIST_BUCKET="supervisor-dist-${rand_token}"
+STACK_NAME="supervisor-${rand_token}"
+TEMPLATE="master.yaml"
+EOF
+
+fi
+
+source $CONFIG_FILE
+
+$AWS s3 mb s3://${DIST_BUCKET}
+$AWS s3api put-bucket-versioning \
+     --bucket ${DIST_BUCKET} \
+     --versioning-configuration MFADelete=Disabled,Status=Enabled
+
+mkdir -p {build,dist}
+
+# Create Lambda deployment packages
+
+for dir in lambda/*; do
+    func_name=$(basename $dir)
+    func_src=lambda/${func_name}/${func_name}.py
+    func_pkg=dist/${func_name}.zip
+
+    pyflakes $func_src
+
+    if [ ! -f $func_pkg ] || [ $func_src -nt $func_pkg ]; then
+        rm -f $func_pkg
+
+        build_dir=build/$func_name
+        rm -rf $build_dir
+        mkdir -p $build_dir
+
+        cp -rv $dir build/
+
+        pushd $build_dir
+        pip install -r requirements.txt -t .
+        rm requirements.txt
+        zip -X -r ../../$func_pkg .
+        popd
+    else
+        echo "$func_name has not been updated, skipping"
+    fi
+done
+
+for tpl_src in cloudformation/*; do
+    tpl_name=$(basename $tpl_src)
+    if [ ! -f dist/$tpl_name ] || [ $tpl_src -nt dist/$tpl_name ]; then
+	cp $tpl_src dist/$tpl_name
+    fi
+done
+
+# if [ ! -f dist/$TEMPLATE ] || [ $TEMPLATE -nt dist/$TEMPLATE ]; then
+#     cp $TEMPLATE dist/$TEMPLATE
+# fi
+
+pushd dist
+$AWS s3 sync . s3://$DIST_BUCKET
+popd
+
+$AWS cloudformation validate-template \
+   --template-url https://s3.amazonaws.com/$DIST_BUCKET/$TEMPLATE

@@ -1,0 +1,19 @@
+#!/bin/bash
+
+set -ex
+
+CONFIG_FILE=./config.sh
+source $CONFIG_FILE
+
+FUNCTION_NAME=$(aws --profile dso-demo-master cloudformation describe-stacks --stack-name supervisor-ozelvplqrffdussc --query "Stacks[?StackName == '${STACK_NAME}'] | [0].Outputs[?OutputKey == 'EnrollAccountFnName'] | [0].OutputValue" --output text)
+
+for role_arn in "$@"; do
+    outfile=$(mktemp)
+    $AWS lambda invoke --function-name $FUNCTION_NAME \
+	 --invocation-type RequestResponse \
+	 --payload "{\"RoleARN\": \"${role_arn}\"}" \
+	 $outfile
+
+    cat $outfile
+    rm $outfile
+done
